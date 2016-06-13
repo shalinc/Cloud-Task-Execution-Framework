@@ -1,0 +1,733 @@
+****************************
+* #### SOURCECODE.TXT #### *
+****************************
+
+### LOCAL WORKER ###
+### CLIENT.PY ###
+"""
+    This is a Client.py File
+    For Executing Local Task Execution Framework
+    The Code requires command line arguments to be passed
+    Help for the same is found by typing client.py -h
+"""
+
+import argparse
+import queue
+from localWorker import localWorker
+import time
+import os
+
+# Class Client
+class client(object):
+
+    # Class Variables
+    task_queue = queue.Queue()
+    response_queue = queue.Queue()
+
+    # Ctor
+    def __init__(self, q_name, workload_file):
+        self.q_name = q_name
+        self.workload_file = workload_file
+
+    # Methods
+
+    # Fetch tasks from WorkLoad File
+    def fetch_tasks(self):
+        try:
+            file_tasks = open(self.workload_file,'r').readlines()
+            #print(file_tasks)
+        except IOError as e:
+            print("ERROR OCCURED: ",e)
+        return file_tasks
+
+    # Put tasks onto in-Memory Queue
+    def send_tasks_queue(self, tasks):
+        for task in tasks:
+            self.task_queue.put(task.strip())
+        return self.task_queue
+
+    # Create ThreadPool
+    def createThreadPool(self,N):
+        local_workers = [localWorker(self.task_queue, self.response_queue) for th in range(N)]
+        return local_workers
+
+
+# main
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s',metavar="QUEUE NAME",type=str,help="the Name of the QUEUE (LOCAL/SQS_QUEUE_NAME)", required=True)
+    parser.add_argument('-t',metavar="NUMBER OF THREADS",type=str,help="Number of Threads in the Pool", required=True)
+    parser.add_argument('-w',metavar="WORKLOAD FILE",type=str,help="Path of the Workload File", required=True)
+    args = parser.parse_args()
+
+    q_name = args.s
+    N = int(args.t)
+    workload_file = os.getcwd()+"/Workloads/"+args.w
+    response_file = os.getcwd()+"/ResponseLogs/"+args.w
+
+    client = client(q_name, workload_file)
+
+    # Fetch the tasks from the Workload File
+    tasks = client.fetch_tasks()
+    print("Fetched the Tasks from Worload File ...")
+
+    #Put the tasks onto a QUEUE
+    start = time.time()
+    task_queue = client.send_tasks_queue(tasks)
+    print("Tasks are in in-memory Queue")
+
+    #Make a Pool of Threads and Start Local Workers
+    local_workers = client.createThreadPool(N)
+
+    #Run tasks
+    for worker in local_workers:
+        worker.start()
+
+    for worker in local_workers:
+        worker.join()
+
+    end = time.time()
+    print("All Tasks Executed Successfully ...")
+    print("Time taken for "+str(N)+" local workers:",str(end-start)+" sec")
+
+    #writing Log File
+    # Adding response to the output_file
+    print("Writing Logs Please wait ...")
+    file = open(response_file+"_Log.txt",'w+')
+
+    #print(client.response_queue.qsize())
+
+    while not client.response_queue.empty():
+       file.write(str(client.response_queue.get())+"\n")
+    file.close()
+
+    print("Logs written Successfully in",response_file+"_Log.txt")
+	
+### LOCALWORKER.PY ###
+"""
+    This code is for Local Worker Execution
+    Here the Local Worker Executes the Task allocated to it
+"""
+
+import queue
+import time
+from threading import Thread
+
+# LocalWorker class
+class localWorker(Thread):
+
+    # Ctor
+    def __init__(self, tasks_queue, response_queue):
+        Thread.__init__(self)
+        self.tasks_queue = tasks_queue
+        self.response_queue = response_queue
+
+    # Overriding the Thread Run method with self-Run Method
+    def run(self):
+        # Execute the Tasks
+        # If Success add 0 to response queue else add 1 for failure
+        try:
+            # Extract while Queue is not Empty
+            while not self.tasks_queue.empty():
+                # Extract SLEEP task time from QUEUE
+                sleepTime = self.tasks_queue.get()
+                # Conversion to MilliSeconds
+                time.sleep(int(sleepTime.split(' ')[1])/1000.0)
+                self.response_queue.put(0)
+        except IOError as e:
+            self.response_queue.put(1)
+            print("ERROR Occured: ", e)
+
+# main
+if __name__ == '__main__':
+    pass
+
+### REMOTE WORKER ###	
+### CLIENT_SQS.PY ###
+"""
+    This is a Client file for remote execution which interacts with SQS
+    The client help will be provided by command python client_SQS.py -h
+"""
+
+import argparse
+import time
+import boto.sqs
+from boto.sqs.message import RawMessage, Message
+import json
+import boto.dynamodb
+import os
+
+# Client Class
+class client(object):
+
+    # Ctor
+    def __init__(self, q_name, workload_file):
+        self.q_name = q_name
+        self.workload_file = workload_file
+
+    # Methods
+    def fetch_tasks(self):
+        try:
+            file_tasks = open(self.workload_file,'r').readlines()
+            #print(file_tasks)
+        except IOError as e:
+            print("ERROR OCCURED: ",e)
+        return file_tasks, len(file_tasks)
+
+    def send_tasks_queue(self, tasks, tasks_queue):
+        print("Establishing a Connection with SQS Queue: ",self.q_name+" ...")
+        print("Connection Established !!!")
+        print("Putting Messages in the Queue ...")
+        i=0
+        for task in tasks:
+            #tasks_queue.send_message(MessageBody=str(task.strip()+" "+str(i)))
+            m = Message()
+            m.set_body(str(task.strip()+" "+str(i)))
+            tasks_queue.write(m)
+            i+=1
+        #print("All Messages are in QUEUE for REMOTE WORKERS to fetch")
+        return tasks_queue
+        #print("All Messages are in QUEUE for REMOTE WORKERS to fetch")
+
+    #def createThreadPool(self,N):
+    #    local_workers = [localWorker(self.task_queue, self.response_queue) for th in range(N)]
+    #    return local_workers
+
+
+# main
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s',metavar="QUEUE NAME",type=str,help="the Name of the QUEUE (LOCAL/SQS_QUEUE_NAME)", required=True)
+    parser.add_argument('-w',metavar="WORKLOAD FILE",type=str,help="Path of the Workload File", required=True)
+    args = parser.parse_args()
+
+    # Load the AWS Configurations
+    config_file = open("config.json",'r')
+    config = json.load(config_file)
+
+    #store the QUEUE NAME for Checking
+    q_name = args.s
+    if not q_name == "TasksQueue":
+        print("INVALID SQS QUEUE NAME")
+        exit(0)
+
+    # name of the workload_file
+    #workload_file = args.w
+    workload_file = os.getcwd()+"/Workloads/"+args.w
+    response_file = os.getcwd()+"/ResponseLogs/"+args.w
+
+    # Client Class Object Creation
+    client = client(q_name, workload_file)
+
+    # Fetch the tasks from the Workload File
+    tasks, no_of_tasks = client.fetch_tasks()
+
+    # Connect to SQS Queue
+    Queue_conn = boto.sqs.connect_to_region("us-east-1",
+            aws_access_key_id = config["AWSAccessKeyId"],
+            aws_secret_access_key = config["AWSSecretKey"])
+    sqs_q = Queue_conn.get_queue(q_name)
+    sqs_resp_q = Queue_conn.get_queue('ResponseQueue')
+
+    #Put the tasks onto a QUEUE
+    start = time.time()
+    task_queue = client.send_tasks_queue(tasks, sqs_q)
+
+    while(no_of_tasks != sqs_resp_q.count()):
+        pass
+
+    end = time.time()
+    print("Time taken to Execute all Msgs in SQS:", str(end-start)+" sec")
+
+    # writing to Log file
+    # Adding response to the output_file
+    file = open(response_file+"_Log.txt",'w+')
+
+    # Get msgs from SQS
+    rs = sqs_resp_q.get_messages()
+    while len(rs) > 0:
+        m = rs[0]
+        file.write(str(m.get_body())+"\n")
+        rs = sqs_resp_q.get_messages()
+    file.close()
+
+    print("Logs written Successfully in",response_file+"_Log.txt")
+
+
+### REMOTEWORKER.PY ###	
+
+"""
+    Remote Worker
+    This is code for implementation Remote Worker
+    The code help can be found by typing RemoteWorker.py -h
+"""
+
+import boto.sqs
+from boto.sqs.message import RawMessage
+import time
+import boto.dynamodb
+import argparse
+import json
+
+
+# main
+if __name__ == "__main__":
+
+    # Command Line Arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-s",metavar="QUEUE NAME",help="Name of the SQS QUEUE",required=True)
+    parser.add_argument("-t",metavar="Number of Workers",help="Number of Workers required", required=True)
+
+    args = parser.parse_args()
+    q_name = args.s
+
+    # Load the AWS Configurations
+    config_file = open("config.json",'r')
+    config = json.load(config_file)
+
+    # Connect to SQS Task and Response Queue
+    Queue_conn = boto.sqs.connect_to_region("us-east-1",
+            aws_access_key_id = config["AWSAccessKeyId"],
+            aws_secret_access_key = config["AWSSecretKey"])
+    try:
+        sqs_q = Queue_conn.get_queue(q_name)
+    except:
+        print("Error in Queue Name .. Please Check again ..")
+
+    sqs_response_q = Queue_conn.get_queue('ResponseQueue')
+
+    #Connect to DynamoDB
+    DyDB_conn = boto.dynamodb.connect_to_region("us-east-1",
+            aws_access_key_id = config["AWSAccessKeyId"],
+            aws_secret_access_key = config["AWSSecretKey"])
+
+    Dy_table = DyDB_conn.get_table('TasksData')
+    #print("Connected to DynamoDB ...")
+
+    #start = time.time()
+
+    # get all the messages from the SQS Queue
+    # Check for Duplicates here using DynamoDB
+
+    # get messages
+    rs = sqs_q.get_messages()
+    count_dupli, count_empty = 0, 0
+    flag = 1
+
+    # Loop till SQS Queue is Empty i.e. there are no tasks left in Queue
+    # Wait for 10 sec's to check if there are any tasks left, else terminate
+    while (flag == 1):
+        if len(rs) > 0:
+            count_empty = 0
+
+            #Extract Message Features
+            m = rs[0]
+            task_sleep_time = m.get_body().split(" ")[1]
+            task_fetched = m.get_body().split(" ")[0] + task_sleep_time
+            task_ID = int(m.get_body().split(" ")[2])
+
+            #print(type(task_ID), task_ID)
+            # Check if Task Already Executed by other worker
+            try:
+                val = Dy_table.get_item(hash_key=task_ID)
+                #print("Task Already Executed",val)
+                sqs_q.delete_message(rs[0])
+                rs = sqs_q.get_messages()
+                count_dupli+=1
+            except:
+                #print("Executing Task Now ...")
+                item_data = {'Tasks': task_fetched}
+                item = Dy_table.new_item(
+                    hash_key = task_ID,
+                    attrs = item_data
+                )
+                item.put()
+
+                # Extract SLEEP task time from QUEUE
+                sleepTime = task_sleep_time
+
+                try:
+                    # Conversion to MilliSeconds
+                    time.sleep(int(sleepTime)/1000.0)  #Add divide by 1000
+                    #print("Deleting from SQS ...")
+                    sqs_q.delete_message(rs[0])
+
+                    #Adding Response to SQS Queue
+                    m = RawMessage()
+                    m.set_body(0)
+                    sqs_response_q.write(m)
+                    rs = sqs_q.get_messages()
+                except:
+                    #Adding Response to SQS Queue
+                    m = RawMessage()
+                    m.set_body(1)
+                    sqs_response_q.write(m)
+                    rs = sqs_q.get_messages()
+
+                continue
+        else:
+            if count_empty < 10:
+                flag = 1
+                count_empty+=1
+                time.sleep(1)
+                print("...Polling for Messages in Queue ... waiting 1 sec ...")
+                rs = sqs_q.get_messages()
+            else:
+                flag = 0
+
+    #end = time.time()
+    #print("Time Taken for Worker: ",str(end-start)+" sec")
+    print("Total Duplicate Tasks Detected: ",count_dupli)
+	
+### WORKER_ANIMOTO.PY ###
+
+"""
+    Remote Worker for Animoto Jobs
+    The code is implemented to launch the animoto clone application
+    which converts images to video
+    It requires S3 bucket already created to put onto it the videos generated
+"""
+
+import boto.sqs
+from boto.sqs.message import RawMessage
+from boto.s3.connection import S3Connection, Location
+import time
+import boto.dynamodb
+import boto.s3
+import argparse
+import json
+from subprocess import call
+import os
+import math
+from filechunkio import FileChunkIO
+
+# Code to Upload video to s3
+def upload_video_s3(sqs_response_q, config):
+
+    S3_conn = boto.s3.connect_to_region("us-east-1",
+                aws_access_key_id = config["AWSAccessKeyId"],
+                aws_secret_access_key = config["AWSSecretKey"])
+
+    #print("Connected to S3 ...")
+
+    # Create a New Bucket, and check if the Bucket Name is already taken
+    #try:
+    #    S3_conn.create_bucket('animoto_video_storage_shalin')
+    #    print("Bucket Created ...")
+    #except:
+    #    print("Already Existing Bucket .. Please choose different Bucket")
+        #print("Error")
+
+    S3Bucket = S3_conn.get_bucket('animoto_video_storage_shalin')
+    #print("Connected to Bucket")
+
+    #### Code Reference http://boto.cloudhackers.com/en/latest/s3_tut.html
+
+    # Get video files Path Info
+    video_paths = []
+
+    #for every file in the directoy find the file which has the .MKV or .mkv extension
+    for video in os.listdir("/home/ubuntu/TaskExecutionFramework/"):
+        if os.path.isfile(video):
+            if video.split('.')[1] == 'MKV' or video.split('.')[1] == 'mkv':
+                video_paths.append("/home/ubuntu/TaskExecutionFramework/" + os.path.basename(video))
+
+    #Now to put videos into S3
+
+    for video_path in video_paths:
+
+        #find the video size
+        source_size = os.stat(video_path).st_size
+
+        # Create a multipart upload request
+        mp = S3Bucket.initiate_multipart_upload(os.path.basename(video_path))
+        #print(os.path.basename(video_path))
+
+        # Use a chunk size of 50 MiB
+        chunk_size = 5242880
+        chunk_count = int(math.ceil(source_size / chunk_size))
+
+        # Send the file parts, using FileChunkIO
+        for i in range(chunk_count):
+            offset = chunk_size * i
+            bytes = min(chunk_size, source_size - offset)
+            with FileChunkIO(video_path, 'r', offset = offset, bytes = bytes) as fp:
+                mp.upload_part_from_file(fp, part_num = i+1)
+
+        # Complete uploading the parts entirely
+        mp.complete_upload()
+
+        # get the Key for S3 video using the video name for fetching URL
+        file_key = S3Bucket.get_key(os.path.basename(video_path))
+
+        url = file_key.generate_url(600)    # URL is valid for 10 minutes
+
+        #write onto the Response Queue the URL of the Video
+        m = RawMessage()
+        m.set_body(url)
+        sqs_response_q.write(m)
+
+if __name__ == "__main__":
+
+    # Command Line Arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-s",metavar="QUEUE NAME",help="Name of the SQS QUEUE",required=True)
+    parser.add_argument("-t",metavar="Number of Workers",help="Number of Workers required", required=True)
+
+    args = parser.parse_args()
+    q_name = args.s
+
+    # Load the AWS Configurations
+    config_file = open("config.json",'r')
+    config = json.load(config_file)
+
+    # Connect to SQS Task and Response Queue
+    Queue_conn = boto.sqs.connect_to_region("us-east-1",
+            aws_access_key_id = config["AWSAccessKeyId"],
+            aws_secret_access_key = config["AWSSecretKey"])
+    try:
+        sqs_q = Queue_conn.get_queue(q_name)
+    except:
+        print("Error in Queue Name .. Please Check again ..")
+
+    sqs_response_q = Queue_conn.get_queue('ResponseQueue')
+
+    #Connect to DynamoDB
+    DyDB_conn = boto.dynamodb.connect_to_region("us-east-1",
+            aws_access_key_id = config["AWSAccessKeyId"],
+            aws_secret_access_key = config["AWSSecretKey"])
+
+    Dy_table = DyDB_conn.get_table('TasksData')
+    #print("Connected to DynamoDB ...")
+
+    #start = time.time()
+
+    # get all the messages from the SQS Queue
+    # Check for Duplicates here using DynamoDB
+
+    # get messages
+    rs = sqs_q.get_messages()
+    count_dupli, count_empty = 0, 0
+    flag = 1
+    i = 0
+    while (flag == 1):
+        if len(rs) > 0:
+            count_empty = 0
+            #Extract Message Features
+            m = rs[0]
+            task_url = m.get_body().split(" ")[0]
+            #task_fetched = m.get_body().split(" ")[0] + task_sleep_time
+            task_ID = int(m.get_body().split(" ")[1])
+
+            #print(type(task_ID), task_ID)
+            # Check if Task Already Executed by other worker
+            try:
+                val = Dy_table.get_item(hash_key=task_ID)
+                #print("Task Already Executed",val)
+                sqs_q.delete_message(rs[0])
+                rs = sqs_q.get_messages()
+                count_dupli+=1
+            except:
+                #print("Executing Task Now ...")
+                item_data = {'Tasks': task_url}
+                item = Dy_table.new_item(
+                    hash_key = task_ID,
+                    attrs = item_data
+                )
+                item.put()
+
+                # Extract URL Images task from QUEUE
+                try:
+                    # print("Deleting from SQS ...")
+                    print("Generating Video from Images")
+                    call('sh exec_images_download.sh {} >> ~/Log{}.txt'.format(str(task_ID).zfill(3),str(task_ID).zfill(3)),shell=True)
+                    sqs_q.delete_message(rs[0])
+                    i+=1
+
+                    #call the S3 component to store the video and return video storage URL
+                    upload_video_s3(sqs_response_q,config)
+                except:
+                    rs = sqs_q.get_messages()
+
+                continue
+        else:
+            if count_empty < 10:
+                flag = 1
+                count_empty+=1
+                time.sleep(1)
+                print("...Polling for Messages in Queue ... waiting 1 sec ...")
+                rs = sqs_q.get_messages()
+            else:
+                flag = 0
+
+    #end = time.time()
+    #print("Time Taken for Worker: ",str(end-start)+" sec")
+    #print("Total Duplicate Tasks Detected: ",count_dupli)
+
+	
+### LAUNCHAWSSERVICES.PY ###
+"""
+    This program is used to launch:
+    1. SQS QUEUE
+    2. DYNAMO DB
+    3. T2 Micro Instance
+    4. S3 Bucket
+"""
+
+import boto.sqs
+import boto.ec2
+import boto.dynamodb
+import json
+import argparse
+import boto.s3
+
+
+# main
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("service",help="Which Amazon Service to Launch (sqs/t2m/dydb/s3) or to stop (del)")
+    args = parser.parse_args()
+
+    # Load the AWS Configurations
+    config_file = open("config.json",'r')
+    config = json.load(config_file)
+
+    # Check which service to start
+    # SQS Start
+    if args.service == "sqs":
+        #Connect to SQS API and Create a Queue
+        Queue_conn = boto.sqs.connect_to_region(
+            "us-east-1",
+            aws_access_key_id = config["AWSAccessKeyId"],
+            aws_secret_access_key = config["AWSSecretKey"])
+
+        sqs_q = Queue_conn.create_queue('TasksQueue')
+        print("SQS Task Queue Created ...")
+        sqs_response_q = Queue_conn.create_queue('ResponseQueue')
+        print("SQS Response Queue Created ...")
+
+    # DynamoDB Start
+    if args.service == "dydb":
+        # Connect to DynamoDB and Create a table
+        DB_conn = boto.dynamodb.connect_to_region(
+            "us-east-1",
+            aws_access_key_id = config["AWSAccessKeyId"],
+            aws_secret_access_key = config["AWSSecretKey"])
+
+        dynamo_table_schema = DB_conn.create_schema(
+            hash_key_name = 'TaskID',
+            hash_key_proto_value = int
+        )
+
+        dynamo_table = DB_conn.create_table(
+            name = 'TasksData',
+            schema = dynamo_table_schema,
+            read_units = 20,
+            write_units = 50
+        )
+        print("DynamoDB Table Created ...")
+
+    # t2.micro start
+    if args.service == "t2m":
+        no_inst = input("How many Instances to Launch: ")
+        for i in range(int(no_inst)):
+            print("Launching t2.micro Instance "+str(i+1)+" please wait ...")
+            Inst_conn = boto.ec2.connect_to_region(
+                "us-east-1",
+                aws_access_key_id = config["AWSAccessKeyId"],
+                aws_secret_access_key = config["AWSSecretKey"])
+
+            Inst_conn.run_instances('ami-3249ae5f',key_name='CloudSorting',instance_type='t2.micro',security_groups=['launch-wizard-2'])
+        print(str(no_inst)+" Instance(s) Launched ...")
+
+    # S3 start
+    if args.service == "s3":
+        S3_conn = boto.s3.connect_to_region("us-east-1",
+                aws_access_key_id = config["AWSAccessKeyId"],
+                aws_secret_access_key = config["AWSSecretKey"])
+        S3_conn.create_bucket('animoto_video_storage_shalin')
+        print("Bucket Created ...")
+
+    # Purge Queues and Delete DynamoDB
+    if args.service == "del":
+        Queue_conn = boto.sqs.connect_to_region(
+            "us-east-1",
+            aws_access_key_id = config["AWSAccessKeyId"],
+            aws_secret_access_key = config["AWSSecretKey"])
+
+        DB_conn = boto.dynamodb.connect_to_region(
+            "us-east-1",
+            aws_access_key_id = config["AWSAccessKeyId"],
+            aws_secret_access_key = config["AWSSecretKey"])
+
+        Queue_conn.get_queue('TasksQueue').purge()
+        Queue_conn.get_queue('ResponseQueue').purge()
+
+        DB_conn.get_table('TasksData').delete()
+
+        print("SQS Queues are Purged ...")
+        print("Dynamo DB table deleted ...")
+
+### GENERATESLEEPTASKS.PY ###
+"""
+    Code to generate the Sleep Tasks and Animoto Jobs
+"""
+
+# generate tasks for Throughput
+def generate_tasks(sleep_time, count):
+
+    try:
+        file = open("tasks_sleep"+sleep_time+"_"+str(count)+".txt",'w+')
+        for i in range(count):
+            file.write("sleep "+sleep_time+"\n")
+        file.close()
+
+    except IOError as e:
+        print("Error Occurred: ",e)
+
+# generate tasks for Efficiency
+def generate_tasks_efficiency():
+    workers = [1,2,4,8,16]
+    sleep_time = [10, 1000, 10*1000]
+    no_tasks = [1000, 100, 10]
+    for i in workers:
+        i_t = 0
+        for st in sleep_time:
+            file = open("worker_"+str(i)+"_sleep_"+str(st)+".txt",'w+')
+            for nt in range(i*no_tasks[i_t]):
+                file.write("sleep "+str(st)+"\n")
+            file.close()
+            i_t+=1
+
+# generate tasks for Animoto
+def generate_animoto_jobs():
+    file = open("Animoto_Jobs.txt",'w+')
+    for i in range(160):
+        file.write("Job_"+str(i)+".txt"+"\n")
+    file.close()
+
+
+if __name__ == "__main__":
+
+    # Sleep time to set
+    sleep_time = "0"
+
+    # Count of Tasks
+    count = 10000
+
+    # Generate Tasks for Throughput
+    generate_tasks(sleep_time, count)
+
+    # Generate for Animoto Jobs
+    #generate_animoto_jobs()
+
+    # Generate Tasks for Efficiency
+    #generate_tasks_efficiency()
+
+	
+*********************************	
+* ### END OF SOURCECODE.TXT ### *
+*********************************
