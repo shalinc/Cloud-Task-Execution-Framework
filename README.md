@@ -18,3 +18,5 @@ There is S3 component involved for storing the videos in case of Animoto Clone f
 converting images to video.
 The instance used for evaluation purpose is t2.micro, linux version: ubutnu and region
 is us-east-1 (N. Virginia)
+
+<img src="architecture.jpg" alt=""></img>
