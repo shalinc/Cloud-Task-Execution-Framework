@@ -2,9 +2,11 @@
 Implementation of Task Execution Framework using Amazon's cloud services like SQS and DynamoDB
 
 This document presents with the performance evaluation for:<br/>
-<strong>  1. Local Back-end Worker<br/>
-  2. Remote Back-end Worker<br/>
-  3. Animoto Video</strong><br/>
+<ol>
+  <li><strong>Local Back-end Worker</strong></li>
+  <li><strong>Remote Back-end Worker</strong></li>
+  <li><strong>Animoto Video</strong></li>
+</ol>
 The diagram below shows the overview of Task Execution Framework for my
 implementation. It consists of a Client, 2 Queues (SQS/ in-memory), Workers
 (Remote/ Local) and DynamoDB (Remote Workers).
