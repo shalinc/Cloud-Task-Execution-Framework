@@ -70,7 +70,7 @@ if __name__ == "__main__":
                 aws_access_key_id = config["AWSAccessKeyId"],
                 aws_secret_access_key = config["AWSSecretKey"])
 
-            Inst_conn.run_instances('ami-3249ae5f',key_name='CloudSorting',instance_type='t2.micro',security_groups=['launch-wizard-2'])
+            Inst_conn.run_instances('ami-ID',key_name='CloudSorting',instance_type='t2.micro',security_groups=['launch-wizard-2'])
         print(str(no_inst)+" Instance(s) Launched ...")
 
     # S3 start
